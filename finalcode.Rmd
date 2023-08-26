@@ -1,0 +1,265 @@
+---
+title: "mgt_6203_project"
+date: "4/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#library(rstudioapi)
+rm(list = ls())
+library(tidyverse)
+library(stats)
+library(Hmisc)
+library(caret)
+library(ggplot2)
+library(sjPlot)
+library('pROC')
+```
+
+```{r}
+marketing_data <- data.frame(read.csv("/Users/mansum/Downloads/archive/ifood_df.csv"))
+#ncol(marketing_data)
+drop_columns <- c('Z_CostContact', 'Z_Revenue')
+marketing_data <- marketing_data[ , !(names(marketing_data) %in% drop_columns)]
+#ncol(marketing_data)
+#describe(df)
+#marketing_data$
+```
+
+```{r}
+#describe(marketing_data)
+cols_as_factors = c('Complain','marital_Divorced', 'marital_Married',	'marital_Single',	'marital_Together',	
+                 'marital_Widow',	'education_2n.Cycle',	'education_Basic',	'education_Graduation',	'education_Master',	
+                   'education_PhD', 'AcceptedCmp1', 'AcceptedCmp2', 'AcceptedCmp3', 'AcceptedCmp4', 'AcceptedCmp5')
+marketing_data[cols_as_factors] <- lapply(marketing_data[cols_as_factors], factor)  ## as.factor() could also be used
+#marketing_data <- marketing_data %>% mutate(marketing_data, TotalSpend = MntWines+ MntFruits+ MntMeatProducts+ MntFishProducts+ MntSweetProducts+ MntGoldProds) %>%
+  #mutate(TotalPurchases = NumDealsPurchases+ NumCatalogPurchases+ NumStorePurchases+ NumWebPurchases) %>%
+  #mutate(TotalDependents = Kidhome + Teenhome) #%>%
+  #mutate(education_Master = education_Master + 'education_2n Cycle')
+```
+
+```{r, include=FALSE}
+#train = .75, test = .125, validation = .125
+n = dim(marketing_data)[1]; ### total number of observations
+n1 = round(n *.25); ### number of observations randomly selected for testing data
+set.seed(6); ### seed for randomization
+flag = sort(sample(1:n, n1));
+marketing_data.train = marketing_data[-flag,]; 
+marketing_data.test.val = marketing_data[flag,];
+n_test = round(dim(marketing_data.test.val)[1] / 2)
+marketing_data.test <- marketing_data.test.val[1:n_test,]
+marketing_data.validation <- marketing_data.test.val[(n_test+1):dim(marketing_data.test.val)[1],]
+
+marketing_data.train.x <- marketing_data.train[, -which(names(marketing_data.train) == "Response")]
+marketing_data.train.y <- as.factor(marketing_data.train[, which(names(marketing_data.train) == "Response")])
+marketing_data.test.x <- marketing_data.test[, -which(names(marketing_data.test) == "Response")]
+marketing_data.test.y <- as.factor(marketing_data.test[, which(names(marketing_data.test) == "Response")])
+marketing_data.validation.x <- marketing_data.validation[, -which(names(marketing_data.validation) == "Response")]
+marketing_data.validation.y <- as.factor(marketing_data.validation[, which(names(marketing_data.validation) == "Response")])
+```
+
+
+
+```{r}
+# Base version Naive Bayes Regression
+options(warn=-1)
+
+library(caret)
+trControl <- trainControl(method = 'repeatedcv',
+                          number = 5,
+                          repeats =  1)
+
+nb.CV <- train(x = marketing_data.train.x , y = marketing_data.train.y, 
+                  method = 'naive_bayes',
+                  trControl = trControl,
+                  metric = "Accuracy"
+                  )
+nb.CV
+```
+
+```{r}
+# Optimize Naive Bayes Regression
+options(warn=-1)
+
+library(caret)
+trControl <- trainControl(method = 'repeatedcv',
+                          number = 5,
+                          repeats =  1)
+#getModelInfo("nb")$nb$parameters
+
+# articles of note
+#https://stackoverflow.com/questions/66236321/error-the-tuning-parameter-grid-should-have-columns-fl-usekernel-adjust-k-fo
+# https://towardsdatascience.com/laplace-smoothing-in-na%C3%AFve-bayes-algorithm-9c237a8bdece
+# https://towardsdatascience.com/understanding-na%C3%AFve-bayes-algorithm-f9816f6f74c0
+# https://s3.amazonaws.com/assets.datacamp.com/production/course_6650/slides/chapter2.pdf
+# https://stat.ethz.ch/R-manual/R-devel/library/stats/html/density.html
+# https://r-coder.com/density-plot-r/
+# https://cran.r-project.org/web/packages/kedd/vignettes/kedd.pdf
+# https://www.hindawi.com/journals/jps/2015/242683/#conclusion
+# https://aakinshin.net/posts/kde-bw/
+
+# usekernel = if true use a kernel density estimate for continuous variables versus a gaussian density estimate if false
+# laplace = provides an additive smoothing effect whic is to help with the zero probability issue that is common with naive bayes 
+# adjust = selecting the bandwidth for kernel density. 
+  # small bw leads t undersmoothing 
+  # large bw leads to oversmoothing
+nbGrid <-  expand.grid(usekernel = c(TRUE, FALSE),
+                         laplace = seq(0, 1, 0.1),
+                       #na.action not needed
+                       adjust = seq (0.25, 2, 0.25))
+
+nb.opt.CV <- train(x= marketing_data.train.x , y= marketing_data.train.y, 
+                  method = 'naive_bayes',
+                  trControl = trControl,
+                  metric = "Accuracy",
+                  tuneGrid = nbGrid)
+#nb.opt.CV
+```
+## Stepwise
+
+
+```{r, include=FALSE}
+#full model
+marketing_data_fullmodel=glm(marketing_data.train.y~.,data=marketing_data.train.x,family='binomial')
+summary(marketing_data_fullmodel)
+plot_model(marketing_data_fullmodel)
+
+#minimum model
+minimummodel=glm(marketing_data.train.y ~ 1, data = marketing_data.train.x,family='binomial')
+summary(minimummodel)
+
+#backward stepwise regression, variable selection, model creation, prediction and accuracy on test and validation data set
+stepwise_backward=step(marketing_data_fullmodel, scope=list(lower=minimummodel,upper=marketing_data_fullmodel), direction="backward", k=log(n))
+summary(stepwise_backward)
+
+
+#forward stepwise regression, variable selection, model creation, prediction and accuracy on test and validation data set
+stepwise_forward=step(minimummodel, scope=list(lower=minimummodel,upper=marketing_data_fullmodel), direction="forward", k=log(n),family='binomial')
+summary(stepwise_forward)
+
+#Kfold model from variable selected in backward stepwise model creation, prediction and accuracy on test and validation data set
+train_control <- trainControl(method = "cv",
+                              number = 10)
+kfold_backward <- train(as.factor(Response)~Teenhome + Recency + MntMeatProducts + 
+    NumDealsPurchases + NumStorePurchases + AcceptedCmp3 + AcceptedCmp5 + 
+    AcceptedCmp1 + AcceptedCmp2 + Customer_Days + marital_Married + 
+    marital_Together + education_2n.Cycle + education_Basic + 
+    education_Graduation, data = marketing_data.train, trControl = train_control, family='binomial')
+print(kfold_backward)
+
+#Kold model from variable selected in backward stepwise model creation, prediction and accuracy on test and validation data set
+kfold_forward <- train(as.factor(Response)~AcceptedCmpOverall + Customer_Days + 
+    Recency + Teenhome + marital_Married + marital_Together + 
+    education_PhD + NumDealsPurchases + AcceptedCmp4 + MntMeatProducts + 
+    NumStorePurchases, data = marketing_data.train,
+               trControl = train_control, family='binomial')
+print(kfold_forward)
+
+
+
+```
+
+
+
+# Random Forest 
+
+We wanted to see how our synthetic variables (TotalSpend, TotalPurchases, TotalDependents) perform in a model compared to the original variables.   
+
+To test this, we created two Random Forest Models. First with all original columns, and second with original and synthetic variables while removing the variables used to create synthetic variables. For example, the synthetic variable 'TotalDependents' is created with the summation of 'Kidhome' and 'Teenhome.' In the second model, 'KidHome' and 'TeenHome' variables were removed, while in the first model, 'TotalDependents' was not used.   
+
+Both models were trained on the same training dataset (70%), consistent with other models. The first model with all original variables achieved 88.77% accuracy on the test dataset, while the second model with synthetic variables achieved 89.49% accuracy. In both models, the Response variable was treated as a factor.  
+
+<Optional> On the validation dataset we got 86.55% & 87.27% accuracy from rf_original and rf_synthetic models respectively.
+
+```{r}
+
+
+```
+
+```{r}
+library(randomForest)
+
+model_rf <- randomForest(marketing_data.train.y ~ ., marketing_data.train.x, importance = TRUE, nodesize = 5)
+
+# Prediction on Test
+
+prediction <- predict(model_rf, marketing_data.validation.x)
+
+confusionMatrix(prediction, marketing_data.validation.y)
+
+#varImpPlot(model_rf, type=1)
+
+# Prediction on Validation 
+
+varImpPlot(model_rf, type=1)
+
+
+```
+
+```{r}
+# build model test function
+
+# https://en.wikipedia.org/wiki/Accuracy_and_precision
+# precision is the degree to which repeated (or reproducible) measurements under unchanged conditions show the same results
+# accuracy 
+model_test <- function(model, model_name, test_x, test_y) {
+  test<- cbind(test_x,test_y)
+  predicted <- predict(model, test_x)
+  if(class(predicted)!="factor"){
+  predicted<-round(predicted,2)
+  predicted<-ifelse(predicted>0.5,1,0)
+  xtab<-table(predicted,test_y)
+  result <- confusionMatrix(xtab, mode="prec_recall")
+  ctable <- as.table(xtab, nrow = 2, byrow = TRUE)
+  fourfoldplot(ctable, color = c("#CC6666", "#99CC99"),
+             conf.level = 0, margin = 1, main = "Confusion Matrix")
+  }
+  else{
+  xtab<-table(predicted,test_y)
+  ctable <- as.table(xtab, nrow = 2, byrow = TRUE)
+  fourfoldplot(ctable, color = c("#CC6666", "#99CC99"),
+  conf.level = 0, margin = 1, main = "Confusion Matrix")
+  result <- confusionMatrix(predicted, as.factor(test_y), mode="prec_recall")
+  }
+  result
+  precision = result$byClass["Precision"]
+  recall = result$byClass["Recall"]
+  f1 = result$byClass["F1"]
+  accuracy = result$overall["Accuracy"]
+  outputs = list('Model'=model_name,'Precision' = precision, 'Recall' = recall, 'Accuracy' = accuracy)
+  output_df <- data.frame(outputs)
+  #print(output_df)
+  return(output_df)
+}
+```
+
+```{r}
+options(warn=-1)
+
+#logistic_results <- model_test(logit.CV, 'Basic Logistic Regression', marketing_data.test.x, marketing_data.test.y)
+
+#logistic_stepwise_results <- model_test(logit.step.CV, 'Stepwise Logistic Regression', marketing_data.test.x, marketing_data.test.y)
+
+core_model_results <- rbind(model_test(nb.CV, 'Basic Naives Bayes', marketing_data.validation.x, marketing_data.validation.y),
+                             model_test(nb.opt.CV, 'Optimal Naive Bayes',marketing_data.validation.x, marketing_data.validation.y)
+          ,model_test(stepwise_forward, 'stepwise_forward', marketing_data.validation.x, marketing_data.validation.y),
+          model_test(model_rf, 'model_rf', marketing_data.validation.x, marketing_data.validation.y))
+
+          
+core_model_results
+
+final_results <- rbind(model_test(stepwise_forward, 'stepwise_forward', marketing_data.test.x, marketing_data.test.y))
+          
+
+final_results
+#naive_bayes_optimal_results <- model_test(nb.opt.CV, 'Optimal Naive Bayes',marketing_data.test.x, marketing_data.test.y)
+```
+
+```{r}
+
+#rbind(model_test(kfold_backward, 'K-Fold Forward', marketing_data.test.x, marketing_data.test.y))
+```
